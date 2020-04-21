@@ -56,14 +56,14 @@ func init() {
 	godotenv.Load()
 }
 
-type Microbo struct {
+type Server struct {
 	http.Server
 	Router   *mux.Router
 	DB       *gorm.DB
 	RootPath string
 }
 
-func (server *Microbo) setupStatic(path string) {
+func (server *Server) setupStatic(path string) {
 	if server.RootPath != "" {
 		fs := httpNoDirFileSystem{http.Dir(server.RootPath)}
 		staticFileHandler := http.FileServer(fs)
@@ -73,16 +73,16 @@ func (server *Microbo) setupStatic(path string) {
 	}
 }
 
-func (server *Microbo) HandleFunc(method, path string, f func(http.ResponseWriter, *http.Request)) {
+func (server *Server) HandleFunc(method, path string, f func(http.ResponseWriter, *http.Request)) {
 	server.Router.HandleFunc(path, f).Methods(method, "OPTIONS")
 }
 
-func (server *Microbo) Run() {
+func (server *Server) Run() {
 	log.Printf("Server started on %s\n", server.Addr)
 	log.Fatal(server.ListenAndServeTLS(os.Getenv("CERT_FILE"), os.Getenv("CERT_KEY")))
 }
 
-func NewServer() *Microbo {
+func NewServer() *Server {
 	var db *gorm.DB
 	var err error
 	if os.Getenv("DB_DIALECT") != "" {
@@ -94,7 +94,7 @@ func NewServer() *Microbo {
 	router := mux.NewRouter()
 	router.Use(corsMiddleware)
 	router.Use(logMiddleware)
-	server := &Microbo{
+	server := &Server{
 		Server: http.Server{
 			Handler:      router,
 			Addr:         os.Getenv("SERVER_ADDR"),

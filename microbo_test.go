@@ -43,3 +43,38 @@ func TestHelloWorld(t *testing.T) {
 
 	assert.Equal(t, "world", r)
 }
+
+type CustomServer struct {
+	*Server
+	Data string
+}
+
+func NewCustomServer(data string) *CustomServer {
+	return &CustomServer{
+		Server: NewServer(),
+		Data:   data,
+	}
+}
+
+func (server *CustomServer) handleHelloCustomServer(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Content-Type", "application/json")
+	encoder := json.NewEncoder(w)
+	encoder.Encode(server.Data)
+}
+
+func TestHelloWorldWithCustomServer(t *testing.T) {
+	setEnvVars()
+	server := NewCustomServer("world")
+	server.HandleFunc("GET", "/hello", server.handleHelloCustomServer)
+	recorder := httptest.NewRecorder()
+
+	req, _ := http.NewRequest("GET", "/hello", nil)
+	server.Router.ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "application/json", recorder.HeaderMap["Content-Type"][0])
+
+	var r string
+	json.Unmarshal(recorder.Body.Bytes(), &r)
+
+	assert.Equal(t, "world", r)
+}
