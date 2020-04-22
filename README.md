@@ -2,7 +2,7 @@
 
 Microbo is a micro framework to create micro API webservers in go. A webserver
 that use Microbo require a very minimal configuration (just create a `.env` file) and support a DB
-connection, CORS and HTTP2 out of the box.
+connection, CORS, authentication with JWT and HTTP2 out of the box.
 
 ## Usage
 
@@ -41,7 +41,7 @@ type MyServer struct {
 
 func NewServer(data string) *MyServer {
   server := &MyServer{
-    Server: microbo.NewServer(),
+    Server: microbo.NewServer(nil),
     Data:   data,
   }
   server.HandleFunc("GET", "/ping", server.pingHandler)
