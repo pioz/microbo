@@ -100,6 +100,7 @@ func NewServer(db *gorm.DB) *Server {
 		pathsWithAuthRouter: mux.NewRouter(),
 		jwtKey:              os.Getenv("JWT_KEY"),
 	}
+	// server.Router.Use(mux.CORSMethodMiddleware(server.Router))
 	server.Router.Use(corsMiddleware)
 	server.Router.Use(logMiddleware)
 	server.setupStatic(os.Getenv("ROOT_PATH_ENDPOINT"))
@@ -133,9 +134,10 @@ func (server *Server) setupAuthHandlers() {
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Access-Control-Allow-Origin", "*")
-		w.Header().Add("Access-Control-Allow-Headers", "Accept-Language, Content-Language, Content-Type, Origin")
+		w.Header().Add("Access-Control-Allow-Headers", "Accept-Language, Authorization, Content-Language, Content-Type, Origin")
+		w.Header().Add("Access-Control-Expose-Headers", "X-Token")
 		if r.Method == http.MethodOptions {
-			w.WriteHeader(200)
+			w.WriteHeader(http.StatusOK)
 			return
 		} else {
 			next.ServeHTTP(w, r)
@@ -191,7 +193,8 @@ func (server *Server) jwtMiddleware(next http.Handler) http.Handler {
 // Router. The documentation for ServeMux explains how patterns are matched.
 // See https://godoc.org/net/http#HandleFunc
 func (server *Server) HandleFunc(method, path string, f func(http.ResponseWriter, *http.Request)) {
-	server.Router.HandleFunc(path, f).Methods(method, "OPTIONS")
+	// server.Router.HandleFunc(path, f).Methods(method, http.MethodOptions)
+	server.Router.HandleFunc(path, f).Methods(method, http.MethodOptions)
 }
 
 // Handles registered with HandleFuncWithAuth must be requested with a valid
@@ -219,9 +222,11 @@ func (server *Server) HandleFunc(method, path string, f func(http.ResponseWriter
 //   curl --location --request POST 'https://localhost:3000/auth/refresh' \
 //   --header 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJVc2VySWQiOjExLCJleHAiOjE1ODc2NzIzOTl9.vEoYBueacCA_JQkPmDCwpfIutsC5jQmYfL692q0Nrrk' \
 //   --header 'Content-Type: application/json'
-// These endpoints and the authentication by JWT token are enabled only if
-// exist a database table named `users` with the columns `id`, `email` and
-// `password`. Password will be stored as a bcrypt hash.
+// In the responses of these endpoints, the token will be present in the
+// header under the X-Token key. Also, these endpoints and the authentication
+// by JWT token are enabled only if exists a database table named `users` with
+// the columns `id`, `email` and `password`. Password will be stored as a
+// bcrypt hash.
 func (server *Server) HandleFuncWithAuth(method, path string, f func(http.ResponseWriter, *http.Request)) {
 	server.pathsWithAuthRouter.NewRoute().Path(path)
 	server.HandleFunc(method, path, f)
@@ -328,16 +333,17 @@ func (server *Server) refreshHandler(w http.ResponseWriter, r *http.Request) {
 
 func (server *Server) respondWithToken(claims *jwtClaims, w http.ResponseWriter) {
 	w.Header().Add("Content-Type", "application/json")
-	claims.ExpiresAt = time.Now().Add(time.Hour * 24).Unix()
+	claims.IssuedAt = time.Now().Unix()
+	claims.ExpiresAt = time.Now().Add(time.Hour * 24 * 30).Unix() // token duration is 1 month
 	token := jwt.NewWithClaims(jwt.GetSigningMethod("HS256"), claims)
 	tokenString, err := token.SignedString([]byte(server.jwtKey))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	response := authResponse{Token: tokenString}
-	encoder := json.NewEncoder(w)
-	encoder.Encode(response)
+	log.Println(tokenString)
+	w.Header().Add("X-Token", tokenString)
+	w.WriteHeader(http.StatusOK)
 }
 
 func (server *Server) existValidUserTable() bool {

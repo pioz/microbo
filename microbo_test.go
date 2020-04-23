@@ -160,10 +160,7 @@ func TestRegistration(t *testing.T) {
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, "application/json", recorder.HeaderMap["Content-Type"][0])
-
-	var response authResponse
-	json.Unmarshal(recorder.Body.Bytes(), &response)
-	assert.NotEmpty(t, response.Token)
+	assert.NotEmpty(t, recorder.HeaderMap["X-Token"][0])
 }
 
 func TestLoginNoBody(t *testing.T) {
@@ -224,10 +221,7 @@ func TestLogin(t *testing.T) {
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, "application/json", recorder.HeaderMap["Content-Type"][0])
-
-	var response authResponse
-	json.Unmarshal(recorder.Body.Bytes(), &response)
-	assert.NotEmpty(t, response.Token)
+	assert.NotEmpty(t, recorder.HeaderMap["X-Token"][0])
 }
 
 func TestRefreshTokenWithoutToken(t *testing.T) {
@@ -251,11 +245,7 @@ func TestRefreshToken(t *testing.T) {
 	req, _ := http.NewRequest("POST", "/auth/login", bytes.NewBuffer(payload))
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
-
-	var response authResponse
-	json.Unmarshal(recorder.Body.Bytes(), &response)
-	assert.NotEmpty(t, response.Token)
-	token := response.Token
+	token := recorder.HeaderMap["X-Token"][0]
 
 	time.Sleep(time.Second)
 
@@ -265,10 +255,7 @@ func TestRefreshToken(t *testing.T) {
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, "application/json", recorder.HeaderMap["Content-Type"][0])
-
-	json.Unmarshal(recorder.Body.Bytes(), &response)
-	assert.NotEmpty(t, response.Token)
-	assert.NotEqual(t, token, response.Token)
+	assert.NotEqual(t, token, recorder.HeaderMap["X-Token"][0])
 }
 
 func TestNoAuthIfNoValidUserTable(t *testing.T) {
@@ -278,4 +265,39 @@ func TestNoAuthIfNoValidUserTable(t *testing.T) {
 	req, _ := http.NewRequest("POST", "/auth/login", nil)
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusNotFound, recorder.Code)
+}
+
+func authPingHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Add("Content-Type", "application/json")
+	userId := r.Context().Value("user_id").(uint)
+	encoder := json.NewEncoder(w)
+	encoder.Encode(fmt.Sprintf("pong %d", userId))
+}
+
+func TestGetRequestHandlerWithAuth(t *testing.T) {
+	setEnvVars()
+	server := NewServer(populateDB())
+	server.HandleFuncWithAuth("GET", "/ping", authPingHandler)
+
+	user := userModel{}
+	server.DB.Where("email = ?", "pioz@sample.com").Find(&user)
+
+	recorder := httptest.NewRecorder()
+	payload := []byte(`{"email":"pioz@sample.com","password":"querty"}`)
+	req, _ := http.NewRequest("POST", "/auth/login", bytes.NewBuffer(payload))
+	server.Router.ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	token := recorder.HeaderMap["X-Token"][0]
+	fmt.Println(token)
+
+	recorder = httptest.NewRecorder()
+	req, _ = http.NewRequest("GET", "/ping", nil)
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+	server.Router.ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "application/json", recorder.HeaderMap["Content-Type"][0])
+
+	var r string
+	json.Unmarshal(recorder.Body.Bytes(), &r)
+	assert.Equal(t, fmt.Sprintf("pong %d", user.ID), r)
 }
