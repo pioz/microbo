@@ -28,37 +28,44 @@ package main
 
 import (
   "encoding/json"
+  "fmt"
   "net/http"
+  "os"
 
   _ "github.com/jinzhu/gorm/dialects/mysql"
   "github.com/pioz/microbo"
 )
 
-type MyServer struct {
+type Server struct {
   *microbo.Server
-  Data string
 }
 
-func NewServer(data string) *MyServer {
-  server := &MyServer{
-    Server: microbo.NewServer(nil),
-    Data:   data,
-  }
-  server.HandleFunc("GET", "/ping", server.pingHandler)
+func NewServer() *Server {
+  server := &Server{Server: microbo.NewServer(nil)}
+  server.HandleFunc("GET", "/ping", pingHandler)
+  server.HandleFuncWithAuth("GET", "/secure-ping", server.securePingHandler)
   return server
 }
 
-func (server *MyServer) pingHandler(w http.ResponseWriter, r *http.Request) {
+func pingHandler(w http.ResponseWriter, r *http.Request) {
   w.Header().Add("Content-Type", "application/json")
   encoder := json.NewEncoder(w)
-  encoder.Encode(server.Data)
+  encoder.Encode("pong")
+}
+
+func (server *Server) securePingHandler(w http.ResponseWriter, r *http.Request) {
+  w.Header().Add("Content-Type", "application/json")
+  userId := r.Context().Value("user_id").(uint)
+  user := microbo.DefaultUser{} // or your user model struct
+  server.DB.Where("id = ?", userId).Find(&user)
+  encoder := json.NewEncoder(w)
+  encoder.Encode(fmt.Sprintf("pong %s", user.Email))
 }
 
 func main() {
-  server := NewServer("pong")
-  server.Run()
+  os.Setenv("SERVER_ADDR", "127.0.0.1:3001") // override env variable
+  NewServer().Run()
 }
-
 ```
 
 And yeah, your microservice is ready!
