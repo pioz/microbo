@@ -1,25 +1,32 @@
 // Microbo is a micro framework to create micro API webservers in go. A
 // webserver that use Microbo require a very minimal configuration (just
-// create a `.env` file) and support a DB connection, CORS, authentication
-// with JWT and HTTP2 out of the box.
+// create a .env file) and support a DB connection, CORS, authentication with
+// JWT and HTTP2 out of the box.
 package microbo
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/mux"
+	"github.com/jinzhu/copier"
 	"github.com/jinzhu/gorm"
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
 )
+
+func init() {
+	godotenv.Load()
+}
 
 type httpNoDirFileSystem struct {
 	fs http.FileSystem
@@ -42,8 +49,48 @@ type jwtClaims struct {
 	jwt.StandardClaims
 }
 
-func init() {
-	godotenv.Load()
+// User Databse Model
+
+// This is the interface that you have to imprement to use custom user model.
+type UserModel interface {
+	GetID() uint
+	GetEmail() string
+	GetPassword() string
+	TableName() string
+	EmailColumnName() string
+}
+
+// The default user struct used to manage users. However, you can always use
+// your own user model (see below).
+type DefaultUser struct {
+	ID       uint   `json:"id"`
+	Email    string `json:"email"`
+	Password string `json:"-"`
+}
+
+// Return the ID of user record as uint.
+func (u DefaultUser) GetID() uint {
+	return u.ID
+}
+
+// Return the email of user record as string.
+func (u DefaultUser) GetEmail() string {
+	return u.Email
+}
+
+// Return the encrypted password of user record as string.
+func (u DefaultUser) GetPassword() string {
+	return u.Password
+}
+
+// Return the user table name in your DB. Default "users".
+func (DefaultUser) TableName() string {
+	return "users"
+}
+
+// Return the user email column name in your DB. Default "email".
+func (DefaultUser) EmailColumnName() string {
+	return "email"
 }
 
 // The base server struct. It contains the Router and the DB access.
@@ -58,24 +105,29 @@ type Server struct {
 	DB *gorm.DB
 	// The path of the public folder. Files inside will be serverd as static
 	// files.
-	RootPath            string
+	RootPath string
+
+	jwtAuthSupport      bool
 	pathsWithAuthRouter *mux.Router
 	jwtKey              string
+	userModel           UserModel
 }
 
-// Create a new Microbo server. You can pass a pointer to an existing gorm.DB
-// variable, or nil to create a new one using `.env` variables `DB_DIALECT`
-// and `DB_CONNECTION`. To create a new server Microbo use config enviroment
-// variables that can be store in a handy `.env` file. The available env
-// variables are:
-//   * CERT_FILE: path to the certificate file (.pem). For dev purpose you can use mkcert (https://github.com/FiloSottile/mkcert).
-//   * CERT_KEY: path to the certificate key file (.pem).
-//   * DB_CONNECTION: a Gorm database connection string (es: "root@tcp(127.0.0.1:3306)/testdb?charset=utf8mb4&parseTime=True").
-//   * DB_DIALECT: one of the SQL dialects made available by Gorm.
-//   * ROOT_PATH: path of the public root path. Files inside will be served as static files.
-//   * ROOT_PATH_ENDPOINT: URL path to access public files (es: /public/).
-//   * SERVER_ADDR: the server address with port (es: 127.0.0.1:3000).
-//   * JWT_KEY: the JWT key used to sign tokens.
+// Create a new Microbo server.
+//
+// You can pass a pointer to an existing gorm.DB variable, or nil to create a
+// new one using .env variables DB_DIALECT and DB_CONNECTION.
+//
+// Microbo uses config enviroment variables that can be store in a handy .env
+// file. The available env variables are:
+//  - CERT_FILE: path to the certificate file (.pem). For dev purpose you can use mkcert (https://github.com/FiloSottile/mkcert).
+//  - CERT_KEY: path to the certificate key file (.pem).
+//  - DB_CONNECTION: a Gorm database connection string (es: "root@tcp(127.0.0.1:3306)/testdb?charset=utf8mb4&parseTime=True").
+//  - DB_DIALECT: one of the SQL dialects made available by Gorm.
+//  - ROOT_PATH: path of the public root path. Files inside will be served as static files.
+//  - ROOT_PATH_ENDPOINT: URL path to access public files (es: /public/).
+//  - SERVER_ADDR: the server address with port (es: 127.0.0.1:3000).
+//  - JWT_KEY: the JWT key used to sign tokens.
 func NewServer(db *gorm.DB) *Server {
 	if db == nil {
 		var err error
@@ -94,21 +146,152 @@ func NewServer(db *gorm.DB) *Server {
 			WriteTimeout: 15 * time.Second,
 			ReadTimeout:  15 * time.Second,
 		},
-		Router:              router,
-		DB:                  db,
-		RootPath:            os.Getenv("ROOT_PATH"),
+		Router:   router,
+		DB:       db,
+		RootPath: os.Getenv("ROOT_PATH"),
+
+		jwtAuthSupport:      false,
 		pathsWithAuthRouter: mux.NewRouter(),
 		jwtKey:              os.Getenv("JWT_KEY"),
+		userModel:           &DefaultUser{},
 	}
 	// server.Router.Use(mux.CORSMethodMiddleware(server.Router))
 	server.Router.Use(corsMiddleware)
 	server.Router.Use(logMiddleware)
 	server.setupStatic(os.Getenv("ROOT_PATH_ENDPOINT"))
-	if server.existValidUserTable() {
-		server.Router.Use(server.jwtMiddleware)
-		server.setupAuthHandlers()
-	}
+	server.addJWTAuthSupport()
 	return server
+}
+
+// Public API
+
+// Set a custom user model. The custom user model must implement the interface UserModel. Here and example:
+//  type FullUser struct {
+//   	UID         uint `gorm:"auto_increment;primary_key"`
+//   	Mail        string
+//   	EncPassword string
+//   	Username    string
+//   	Role        bool
+//  }
+//
+//  func (u FullUser) GetID() uint {
+//  	return u.UID
+//  }
+//
+//  func (u FullUser) GetEmail() string {
+//  	return u.Mail
+//  }
+//
+//  func (u FullUser) GetPassword() string {
+//  	return u.EncPassword
+//  }
+//
+//  func (FullUser) TableName() string {
+//  	return "user"
+//  }
+//
+//  func (FullUser) EmailColumnName() string {
+//  	return "mail"
+//  }
+//
+//  func (user *FullUser) ID(id uint) {
+//  	user.UID = id
+//  }
+//
+//  // Used for copier (see https://github.com/jinzhu/copier)
+//  func (user *FullUser) Email(email string) {
+//  	user.Mail = email
+//  }
+//
+//  // Used for copier (see https://github.com/jinzhu/copier)
+//  func (user *FullUser) Password(password string) {
+//  	user.EncPassword = password
+//  }
+//
+//  func (u FullUser) MarshalJSON() ([]byte, error) {
+//  	return json.Marshal(struct {
+//  		ID        uint   `json:"id"`
+//  		Mail      string `json:"mail"`
+//  		Username  string `json:"username"`
+//  		RandToken string `json:"rand_token"`
+//  	}{
+//  		ID:        u.UID,
+//  		Mail:      u.Mail,
+//  		Username:  u.Username,
+//  		RandToken: "RAND TOKEN",
+//  	})
+//  }
+//
+//  server := microbo.NewServer(nil)
+//  server.SetCustomUserModel(&FullUser{})
+//  server.Run()
+// The /auth/login endpoint will return the user json defined by
+// FullUser#MarshalJSON.
+func (server *Server) SetCustomUserModel(userModel UserModel) {
+	server.userModel = userModel
+	server.addJWTAuthSupport()
+}
+
+// HandleFunc registers the handler function for the given pattern in the mux
+// Router. The documentation for ServeMux explains how patterns are matched.
+// See https://godoc.org/net/http#HandleFunc
+func (server *Server) HandleFunc(method, path string, f func(http.ResponseWriter, *http.Request)) {
+	server.Router.HandleFunc(path, f).Methods(method, http.MethodOptions)
+}
+
+// Handles registered with HandleFuncWithAuth must be requested with a valid
+// JWT bearer token. Inside the handler you can retrieve the authenticated
+// userId with
+//   userId := r.Context().Value("user_id").(uint)
+//
+// Built in authentication endpoints are:
+//   // Register a new user
+//   curl --location --request POST 'https://localhost:3000/auth/register' \
+//   --header 'Content-Type: application/json' \
+//   --data-raw '{
+//     "email": "epilotto@gmx.com",
+//     "password": "qwerty"
+//   }'
+// Return 200 if user has successfully registered, or other http error codes
+// if not. No body will be returned in the response.
+//
+//   // Get a new JWT token
+//   curl --location --request POST 'https://localhost:3000/auth/login' \
+//   --header 'Content-Type: application/json' \
+//   --data-raw '{
+//     "email": "epilotto@gmx.com",
+//     "password": "qwerty"
+//   }'
+// Return 200 and the json with user data if user has successfully
+// autheticated. The token will be present in the header under the X-Token
+// key.
+//
+//   // Refresh a JWT token
+//   curl --location --request POST 'https://localhost:3000/auth/refresh' \
+//   --header 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJVc2VySWQiOjExLCJleHAiOjE1ODc2NzIzOTl9.vEoYBueacCA_JQkPmDCwpfIutsC5jQmYfL692q0Nrrk' \
+//   --header 'Content-Type: application/json'
+// Return 200 if the token has successfully refreshed. The new token will be
+// present in the header under the X-Token key. No body will be returned in
+// the response.
+//
+// Also, these endpoints and the authentication by JWT token are enabled only
+// if exists a database table named "users" with the columns "id", "email" and
+// "password". Password will be stored as a bcrypt hash.
+func (server *Server) HandleFuncWithAuth(method, path string, f func(http.ResponseWriter, *http.Request)) {
+	server.pathsWithAuthRouter.NewRoute().Path(path)
+	server.HandleFunc(method, path, f)
+}
+
+// Run the server.
+func (server *Server) Run() {
+	log.Printf("Server started on %s\n", server.Addr)
+	log.Fatal(server.ListenAndServeTLS(os.Getenv("CERT_FILE"), os.Getenv("CERT_KEY")))
+}
+
+// Shutdown the server.
+func (server *Server) Shutdown() {
+	log.Println("Server is shutting down")
+	server.DB.Close()
 }
 
 // Setup Methods
@@ -187,74 +370,7 @@ func (server *Server) jwtMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// Public API
-
-// HandleFunc registers the handler function for the given pattern in the mux
-// Router. The documentation for ServeMux explains how patterns are matched.
-// See https://godoc.org/net/http#HandleFunc
-func (server *Server) HandleFunc(method, path string, f func(http.ResponseWriter, *http.Request)) {
-	// server.Router.HandleFunc(path, f).Methods(method, http.MethodOptions)
-	server.Router.HandleFunc(path, f).Methods(method, http.MethodOptions)
-}
-
-// Handles registered with HandleFuncWithAuth must be requested with a valid
-// JWT bearer token. Inside the handler you can retrieve the authenticated
-// `userId` with
-//   userId := r.Context().Value("user_id").(uint)
-// Built in authentication endpoints are:
-//   // Register a new user
-//   curl --location --request POST 'https://localhost:3000/auth/register' \
-//   --header 'Content-Type: application/json' \
-//   --data-raw '{
-//     "email": "epilotto@gmx.com",
-//     "password": "qwerty"
-//   }'
-//
-//   // Get a new JWT token
-//   curl --location --request POST 'https://localhost:3000/auth/login' \
-//   --header 'Content-Type: application/json' \
-//   --data-raw '{
-//     "email": "epilotto@gmx.com",
-//     "password": "qwerty"
-//   }'
-//
-//   // Refresh a JWT token
-//   curl --location --request POST 'https://localhost:3000/auth/refresh' \
-//   --header 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJVc2VySWQiOjExLCJleHAiOjE1ODc2NzIzOTl9.vEoYBueacCA_JQkPmDCwpfIutsC5jQmYfL692q0Nrrk' \
-//   --header 'Content-Type: application/json'
-// In the responses of these endpoints, the token will be present in the
-// header under the X-Token key. Also, these endpoints and the authentication
-// by JWT token are enabled only if exists a database table named `users` with
-// the columns `id`, `email` and `password`. Password will be stored as a
-// bcrypt hash.
-func (server *Server) HandleFuncWithAuth(method, path string, f func(http.ResponseWriter, *http.Request)) {
-	server.pathsWithAuthRouter.NewRoute().Path(path)
-	server.HandleFunc(method, path, f)
-}
-
-// Run the server
-func (server *Server) Run() {
-	log.Printf("Server started on %s\n", server.Addr)
-	log.Fatal(server.ListenAndServeTLS(os.Getenv("CERT_FILE"), os.Getenv("CERT_KEY")))
-}
-
-// Shutdown the server
-func (server *Server) Shutdown() {
-	log.Println("Server is shutting down")
-	server.DB.Close()
-}
-
 // Handlers
-
-type userModel struct {
-	gorm.Model
-	Email    string
-	Password string
-}
-
-func (userModel) TableName() string {
-	return "users"
-}
 
 type registerRequest struct {
 	Email    string `json:"email"`
@@ -282,19 +398,20 @@ func (server *Server) registerHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
-	if !server.DB.Table("users").Where("email = ?", request.Email).Find(&userModel{}).RecordNotFound() {
+	user := server.copyUserModel()
+	if !server.DB.Table(user.TableName()).Where(fmt.Sprintf("%s = ?", user.EmailColumnName()), request.Email).Find(user).RecordNotFound() {
 		http.Error(w, "Email already in use", http.StatusConflict)
 		return
 	}
 	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(request.Password), bcrypt.DefaultCost)
-	user := userModel{Email: request.Email, Password: string(hashedPassword)}
-	if err = server.DB.Create(&user).Error; err != nil {
+	defaultUser := DefaultUser{Email: request.Email, Password: string(hashedPassword)}
+
+	copier.Copy(user, defaultUser)
+	if err = server.DB.Create(user).Error; err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	claims := &jwtClaims{UserId: user.ID}
-	server.respondWithToken(claims, w)
+	w.WriteHeader(http.StatusOK)
 }
 
 func (server *Server) loginHandler(w http.ResponseWriter, r *http.Request) {
@@ -309,30 +426,39 @@ func (server *Server) loginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
-	user := userModel{}
-	if server.DB.Where("email = ?", request.Email).Find(&user).RecordNotFound() {
+	user := server.copyUserModel()
+	if server.DB.Where(fmt.Sprintf("%s = ?", user.EmailColumnName()), request.Email).Find(user).RecordNotFound() {
 		http.Error(w, "Invalid email and/or password", http.StatusUnauthorized)
 		return
 	}
-	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(request.Password))
+	err = bcrypt.CompareHashAndPassword([]byte(user.GetPassword()), []byte(request.Password))
 	if err != nil && err == bcrypt.ErrMismatchedHashAndPassword {
 		http.Error(w, "Invalid email and/or password", http.StatusUnauthorized)
 		return
 	}
-	claims := &jwtClaims{UserId: user.ID}
-	server.respondWithToken(claims, w)
+	claims := &jwtClaims{UserId: user.GetID()}
+
+	w.Header().Add("Content-Type", "application/json")
+	server.addTokenToHeader(claims, w)
+	encoder := json.NewEncoder(w)
+	encoder.Encode(user)
 }
 
 func (server *Server) refreshHandler(w http.ResponseWriter, r *http.Request) {
 	userId := r.Context().Value("user_id").(uint)
 	claims := &jwtClaims{UserId: userId}
-	server.respondWithToken(claims, w)
+	w.Header().Add("Content-Type", "application/json")
+	server.addTokenToHeader(claims, w)
+	w.WriteHeader(http.StatusOK)
 }
 
 // Private functions
 
-func (server *Server) respondWithToken(claims *jwtClaims, w http.ResponseWriter) {
-	w.Header().Add("Content-Type", "application/json")
+func (server *Server) copyUserModel() UserModel {
+	return reflect.New(reflect.ValueOf(server.userModel).Elem().Type()).Interface().(UserModel)
+}
+
+func (server *Server) addTokenToHeader(claims *jwtClaims, w http.ResponseWriter) {
 	claims.IssuedAt = time.Now().Unix()
 	claims.ExpiresAt = time.Now().Add(time.Hour * 24 * 30).Unix() // token duration is 1 month
 	token := jwt.NewWithClaims(jwt.GetSigningMethod("HS256"), claims)
@@ -343,9 +469,13 @@ func (server *Server) respondWithToken(claims *jwtClaims, w http.ResponseWriter)
 	}
 	log.Println(tokenString)
 	w.Header().Add("X-Token", tokenString)
-	w.WriteHeader(http.StatusOK)
 }
 
-func (server *Server) existValidUserTable() bool {
-	return server.DB.Dialect().HasColumn("users", "id") && server.DB.Dialect().HasColumn("users", "email") && server.DB.Dialect().HasColumn("users", "password")
+func (server *Server) addJWTAuthSupport() {
+	tableName := server.userModel.TableName()
+	if !server.jwtAuthSupport && server.DB.Dialect().HasColumn(tableName, server.userModel.EmailColumnName()) {
+		server.jwtAuthSupport = true
+		server.Router.Use(server.jwtMiddleware)
+		server.setupAuthHandlers()
+	}
 }

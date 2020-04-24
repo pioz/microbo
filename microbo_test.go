@@ -29,7 +29,7 @@ func setEnvVars() {
 func populateDB() *gorm.DB {
 	db, _ := gorm.Open(os.Getenv("DB_DIALECT"), os.Getenv("DB_CONNECTION"))
 	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("querty"), bcrypt.DefaultCost)
-	user := userModel{Email: "pioz@sample.com", Password: string(hashedPassword)}
+	user := DefaultUser{Email: "pioz@sample.com", Password: string(hashedPassword)}
 	db.AutoMigrate(&user)
 	db.Create(&user)
 	return db
@@ -159,8 +159,12 @@ func TestRegistration(t *testing.T) {
 	req, _ := http.NewRequest("POST", "/auth/register", bytes.NewBuffer(payload))
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.Equal(t, "application/json", recorder.HeaderMap["Content-Type"][0])
-	assert.NotEmpty(t, recorder.HeaderMap["X-Token"][0])
+	assert.Nil(t, recorder.HeaderMap["X-Token"])
+
+	user := DefaultUser{}
+	server.DB.Last(&user)
+	assert.Equal(t, "hanfry@sample.com", user.Email)
+	assert.NotEmpty(t, user.Password)
 }
 
 func TestLoginNoBody(t *testing.T) {
@@ -222,6 +226,11 @@ func TestLogin(t *testing.T) {
 	assert.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, "application/json", recorder.HeaderMap["Content-Type"][0])
 	assert.NotEmpty(t, recorder.HeaderMap["X-Token"][0])
+
+	user := DefaultUser{}
+	json.Unmarshal(recorder.Body.Bytes(), &user)
+	assert.Equal(t, user.Email, "pioz@sample.com")
+	assert.NotEmpty(t, user.ID)
 }
 
 func TestRefreshTokenWithoutToken(t *testing.T) {
@@ -279,7 +288,7 @@ func TestGetRequestHandlerWithAuth(t *testing.T) {
 	server := NewServer(populateDB())
 	server.HandleFuncWithAuth("GET", "/ping", authPingHandler)
 
-	user := userModel{}
+	user := DefaultUser{}
 	server.DB.Where("email = ?", "pioz@sample.com").Find(&user)
 
 	recorder := httptest.NewRecorder()
@@ -300,4 +309,104 @@ func TestGetRequestHandlerWithAuth(t *testing.T) {
 	var r string
 	json.Unmarshal(recorder.Body.Bytes(), &r)
 	assert.Equal(t, fmt.Sprintf("pong %d", user.ID), r)
+}
+
+type FullUser struct {
+	UID         uint `gorm:"auto_increment;primary_key"`
+	Mail        string
+	EncPassword string
+	Username    string
+	Role        bool
+}
+
+func (u FullUser) GetID() uint {
+	return u.UID
+}
+
+func (u FullUser) GetEmail() string {
+	return u.Mail
+}
+
+func (u FullUser) GetPassword() string {
+	return u.EncPassword
+}
+
+func (FullUser) TableName() string {
+	return "user"
+}
+
+func (FullUser) EmailColumnName() string {
+	return "mail"
+}
+
+func (user *FullUser) ID(id uint) {
+	user.UID = id
+}
+
+func (user *FullUser) Email(email string) {
+	user.Mail = email
+}
+
+func (user *FullUser) Password(password string) {
+	user.EncPassword = password
+}
+
+func (u FullUser) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		ID        uint   `json:"id"`
+		Mail      string `json:"mail"`
+		Username  string `json:"username"`
+		RandToken string `json:"rand_token"`
+	}{
+		ID:        u.UID,
+		Mail:      u.Mail,
+		Username:  u.Username,
+		RandToken: "RAND TOKEN",
+	})
+}
+
+func TestLoginWithCustomUser(t *testing.T) {
+	setEnvVars()
+	db, _ := gorm.Open(os.Getenv("DB_DIALECT"), os.Getenv("DB_CONNECTION"))
+	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("querty"), bcrypt.DefaultCost)
+	user := FullUser{Mail: "hanfry@sample.com", Username: "hanfry", EncPassword: string(hashedPassword)}
+	db.AutoMigrate(&user)
+	db.Create(&user)
+	server := NewServer(db)
+	server.SetCustomUserModel(&FullUser{})
+	recorder := httptest.NewRecorder()
+	userID := user.UID
+
+	payload := []byte(`{"email":"hanfry@sample.com","password":"querty"}`)
+	req, _ := http.NewRequest("POST", "/auth/login", bytes.NewBuffer(payload))
+	server.Router.ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Equal(t, "application/json", recorder.HeaderMap["Content-Type"][0])
+	assert.NotEmpty(t, recorder.HeaderMap["X-Token"][0])
+
+	user = FullUser{}
+	json.Unmarshal(recorder.Body.Bytes(), &user)
+	responseJson := fmt.Sprintf("{\"id\":%d,\"mail\":\"hanfry@sample.com\",\"username\":\"hanfry\",\"rand_token\":\"RAND TOKEN\"}\n", userID)
+	assert.Equal(t, responseJson, string(recorder.Body.Bytes()))
+}
+
+func TestRegistrationWithCustomUser(t *testing.T) {
+	setEnvVars()
+	db, _ := gorm.Open(os.Getenv("DB_DIALECT"), os.Getenv("DB_CONNECTION"))
+	db.AutoMigrate(&FullUser{})
+	server := NewServer(db)
+	server.SetCustomUserModel(&FullUser{})
+	recorder := httptest.NewRecorder()
+
+	payload := []byte(`{"email":"hanfry@sample.com","password":"querty"}`)
+	req, _ := http.NewRequest("POST", "/auth/register", bytes.NewBuffer(payload))
+	server.Router.ServeHTTP(recorder, req)
+	assert.Equal(t, http.StatusOK, recorder.Code)
+	assert.Nil(t, recorder.HeaderMap["X-Token"])
+
+	user := FullUser{}
+	server.DB.Last(&user)
+	assert.Equal(t, "hanfry@sample.com", user.Mail)
+	assert.NotEmpty(t, user.EncPassword)
+	assert.NotEmpty(t, user.UID)
 }
