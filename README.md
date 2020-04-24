@@ -75,6 +75,14 @@ You can use your database with `server.DB` that is a `*gorm.DB` pointer. You can
 
 You can use the router with `server.Router` that is a `*mux.Router` pointer. You can find all info about ["Gorilla web toolkit" here](https://github.com/gorilla/mux).
 
+Also the following authentication endpoints are available:
+
+- POST `/auth/register`
+- POST `/auth/login`
+- POST `/auth/refresh`
+
+Here the [godoc](https://godoc.org/github.com/pioz/microbo) to know all about microbo.
+
 ## Questions or problems?
 
 If you have any issues please add an [issue on

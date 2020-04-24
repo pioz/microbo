@@ -51,7 +51,8 @@ type jwtClaims struct {
 
 // User Databse Model
 
-// This is the interface that you have to imprement to use custom user model.
+// This is the interface that you have to implement to use a custom user
+// model.
 type UserModel interface {
 	GetID() uint
 	GetEmail() string
