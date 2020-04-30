@@ -49,7 +49,7 @@ type jwtClaims struct {
 	jwt.StandardClaims
 }
 
-// User Databse Model
+// User Database Model
 
 // This is the interface that you have to implement to use a custom user
 // model.
@@ -275,9 +275,10 @@ func (server *Server) HandleFunc(method, path string, f func(http.ResponseWriter
 // present in the header under the X-Token key. No body will be returned in
 // the response.
 //
-// Also, these endpoints and the authentication by JWT token are enabled only
-// if exists a database table named "users" with the columns "id", "email" and
-// "password". Password will be stored as a bcrypt hash.
+// Also, these endpoints and the authentication with JWT token are enabled
+// only if exists the env variable JWT_KEY and a database table named "users"
+// with the columns "id", "email" and "password". Password will be stored as a
+// bcrypt hash.
 func (server *Server) HandleFuncWithAuth(method, path string, f func(http.ResponseWriter, *http.Request)) {
 	server.pathsWithAuthRouter.NewRoute().Path(path)
 	server.HandleFunc(method, path, f)
@@ -473,10 +474,12 @@ func (server *Server) addTokenToHeader(claims *jwtClaims, w http.ResponseWriter)
 }
 
 func (server *Server) addJWTAuthSupport() {
-	tableName := server.userModel.TableName()
-	if !server.jwtAuthSupport && server.DB.Dialect().HasColumn(tableName, server.userModel.EmailColumnName()) {
-		server.jwtAuthSupport = true
-		server.Router.Use(server.jwtMiddleware)
-		server.setupAuthHandlers()
+	if os.Getenv("DB_DIALECT") != "" {
+		tableName := server.userModel.TableName()
+		if !server.jwtAuthSupport && os.Getenv("JWT_KEY") != "" && server.DB.Dialect().HasColumn(tableName, server.userModel.EmailColumnName()) {
+			server.jwtAuthSupport = true
+			server.Router.Use(server.jwtMiddleware)
+			server.setupAuthHandlers()
+		}
 	}
 }
