@@ -477,7 +477,7 @@ func (server *Server) addTokenToHeader(claims *jwtClaims, w http.ResponseWriter)
 func (server *Server) addJWTAuthSupport() {
 	if os.Getenv("DB_DIALECT") != "" {
 		tableName := server.userModel.TableName()
-		if !server.jwtAuthSupport && os.Getenv("JWT_KEY") != "" && server.DB.Dialect().HasColumn(tableName, server.userModel.EmailColumnName()) {
+		if !server.jwtAuthSupport && os.Getenv("JWT_KEY") != "" && server.DB.HasTable(tableName) && server.DB.Dialect().HasColumn(tableName, server.userModel.EmailColumnName()) {
 			server.jwtAuthSupport = true
 			server.Router.Use(server.jwtMiddleware)
 			server.setupAuthHandlers()
