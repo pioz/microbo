@@ -157,7 +157,7 @@ func NewServer(db *gorm.DB) *Server {
 		userModel:           &DefaultUser{},
 	}
 	server.Router.Use(corsMiddleware)
-	server.Router.Use(logMiddleware)
+	// server.Router.Use(logMiddleware)
 	server.setupStatic(os.Getenv("ROOT_PATH_ENDPOINT"))
 	server.addJWTAuthSupport()
 	return server
@@ -317,12 +317,18 @@ func (server *Server) setupAuthHandlers() {
 
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Add("Access-Control-Allow-Origin", "*")
-		// w.Header().Add("Access-Control-Allow-Headers", "Accept, Accept-Language, Authorization, Content-Language, Content-Type, Origin")
-		w.Header().Add("Access-Control-Allow-Headers", "*")
-		w.Header().Add("Access-Control-Allow-Methods", "*")
+		accessControlAllowOrigin := r.Header.Get("Origin")
+		w.Header().Add("Access-Control-Allow-Origin", accessControlAllowOrigin)
 		w.Header().Add("Access-Control-Expose-Headers", "X-Token")
 		if r.Method == http.MethodOptions {
+			accessControlAllowMethods := r.Header.Get("Access-Control-Request-Method")
+			accessControlAllowHeaders := r.Header.Get("Access-Control-Request-Headers")
+			w.Header().Add("Access-Control-Allow-Methods", accessControlAllowMethods)
+			w.Header().Add("Access-Control-Allow-Headers", accessControlAllowHeaders)
+			w.Header().Add("Vary", "Origin") // This tell to browser to send the Origin header also in the real request
+			// w.Header().Add("Vary", "Access-Control-Request-Method")
+			// w.Header().Add("Vary", "Access-Control-Request-Headers")
+			w.Header().Add("Access-Control-Max-Age", "86400") // Do not request preflight for the next 24 hours
 			w.WriteHeader(http.StatusOK)
 			return
 		} else {
@@ -470,7 +476,6 @@ func (server *Server) addTokenToHeader(claims *jwtClaims, w http.ResponseWriter)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	log.Println(tokenString)
 	w.Header().Add("X-Token", tokenString)
 }
 
