@@ -156,7 +156,6 @@ func NewServer(db *gorm.DB) *Server {
 		jwtKey:              os.Getenv("JWT_KEY"),
 		userModel:           &DefaultUser{},
 	}
-	// server.Router.Use(mux.CORSMethodMiddleware(server.Router))
 	server.Router.Use(corsMiddleware)
 	server.Router.Use(logMiddleware)
 	server.setupStatic(os.Getenv("ROOT_PATH_ENDPOINT"))
@@ -319,7 +318,9 @@ func (server *Server) setupAuthHandlers() {
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Access-Control-Allow-Origin", "*")
-		w.Header().Add("Access-Control-Allow-Headers", "Accept-Language, Authorization, Content-Language, Content-Type, Origin")
+		// w.Header().Add("Access-Control-Allow-Headers", "Accept, Accept-Language, Authorization, Content-Language, Content-Type, Origin")
+		w.Header().Add("Access-Control-Allow-Headers", "*")
+		w.Header().Add("Access-Control-Allow-Methods", "*")
 		w.Header().Add("Access-Control-Expose-Headers", "X-Token")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
