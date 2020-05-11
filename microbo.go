@@ -157,7 +157,7 @@ func NewServer(db *gorm.DB) *Server {
 		userModel:           &DefaultUser{},
 	}
 	server.Router.Use(corsMiddleware)
-	// server.Router.Use(logMiddleware)
+	server.Router.Use(logMiddleware)
 	server.setupStatic(os.Getenv("ROOT_PATH_ENDPOINT"))
 	server.addJWTAuthSupport()
 	return server
