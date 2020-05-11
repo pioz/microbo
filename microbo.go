@@ -107,8 +107,14 @@ type Server struct {
 	// The path of the public folder. Files inside will be serverd as static
 	// files.
 	RootPath string
+	// The CORS middleware
+	CorsMiddleware mux.MiddlewareFunc
+	// The Log middleware
+	LogMiddleware mux.MiddlewareFunc
+	// The Timeout middleware
+	TimeoutMiddleware mux.MiddlewareFunc
 
-	jwtAuthSupport      bool
+	setupDone           bool
 	pathsWithAuthRouter *mux.Router
 	jwtKey              string
 	userModel           UserModel
@@ -140,27 +146,25 @@ func NewServer(db *gorm.DB) *Server {
 		}
 	}
 	router := mux.NewRouter()
-	server := &Server{
+	return &Server{
 		Server: http.Server{
 			Handler:      router,
 			Addr:         os.Getenv("SERVER_ADDR"),
 			WriteTimeout: 15 * time.Second,
 			ReadTimeout:  15 * time.Second,
 		},
-		Router:   router,
-		DB:       db,
-		RootPath: os.Getenv("ROOT_PATH"),
+		Router:            router,
+		DB:                db,
+		RootPath:          os.Getenv("ROOT_PATH"),
+		CorsMiddleware:    corsMiddleware,
+		LogMiddleware:     logMiddleware,
+		TimeoutMiddleware: timeoutMiddleware,
 
-		jwtAuthSupport:      false,
+		setupDone:           false,
 		pathsWithAuthRouter: mux.NewRouter(),
 		jwtKey:              os.Getenv("JWT_KEY"),
 		userModel:           &DefaultUser{},
 	}
-	server.Router.Use(corsMiddleware)
-	server.Router.Use(logMiddleware)
-	server.setupStatic(os.Getenv("ROOT_PATH_ENDPOINT"))
-	server.addJWTAuthSupport()
-	return server
 }
 
 // Public API
@@ -283,8 +287,21 @@ func (server *Server) HandleFuncWithAuth(method, path string, f func(http.Respon
 	server.HandleFunc(method, path, f)
 }
 
+// Setup the server, should be called before Run().
+func (server *Server) Setup() {
+	server.Router.Use(server.CorsMiddleware)
+	server.Router.Use(server.LogMiddleware)
+	server.Router.Use(server.TimeoutMiddleware)
+	server.setupStatic(os.Getenv("ROOT_PATH_ENDPOINT"))
+	server.addJWTAuthSupport()
+	server.setupDone = true
+}
+
 // Run the server.
 func (server *Server) Run() {
+	if !server.setupDone {
+		server.Setup()
+	}
 	log.Printf("Server started on %s\n", server.Addr)
 	log.Fatal(server.ListenAndServeTLS(os.Getenv("CERT_FILE"), os.Getenv("CERT_KEY")))
 }
@@ -346,6 +363,10 @@ func logMiddleware(next http.Handler) http.Handler {
 		log.Printf("%s -> %s %s\n%s\n\n", r.RemoteAddr, r.Method, r.URL, requestDump)
 		next.ServeHTTP(w, r)
 	})
+}
+
+func timeoutMiddleware(next http.Handler) http.Handler {
+	return http.TimeoutHandler(next, 2*time.Second, "Timeout")
 }
 
 func (server *Server) jwtMiddleware(next http.Handler) http.Handler {
@@ -482,8 +503,7 @@ func (server *Server) addTokenToHeader(claims *jwtClaims, w http.ResponseWriter)
 func (server *Server) addJWTAuthSupport() {
 	if os.Getenv("DB_DIALECT") != "" {
 		tableName := server.userModel.TableName()
-		if !server.jwtAuthSupport && os.Getenv("JWT_KEY") != "" && server.DB.HasTable(tableName) && server.DB.Dialect().HasColumn(tableName, server.userModel.EmailColumnName()) {
-			server.jwtAuthSupport = true
+		if os.Getenv("JWT_KEY") != "" && server.DB.HasTable(tableName) && server.DB.Dialect().HasColumn(tableName, server.userModel.EmailColumnName()) {
 			server.Router.Use(server.jwtMiddleware)
 			server.setupAuthHandlers()
 		}
