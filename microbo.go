@@ -168,6 +168,12 @@ type Conf struct {
 	// parameters set to 2 seconds.
 	// See https://godoc.org/net/http#TimeoutHandler
 	// See https://godoc.org/github.com/gorilla/mux#Router.Use
+	// An example to change the timeout:
+	//  conf := microbo.Conf{
+	//  	TimeoutMiddleware: func(next http.Handler) http.Handler {
+	//  		return http.TimeoutHandler(next, 60*time.Second, "Timeout")
+	//  	},
+	//  }
 	TimeoutMiddleware mux.MiddlewareFunc
 	// ReadTimeout is the maximum duration for reading the entire request,
 	// including the body.
