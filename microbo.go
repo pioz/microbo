@@ -94,6 +94,91 @@ func (DefaultUser) EmailColumnName() string {
 	return "email"
 }
 
+type ServerConf struct {
+	// Pointer to gorm ORM database.
+	// See https://godoc.org/github.com/jinzhu/gorm#DB
+	DB *gorm.DB
+	// Set a custom user model. The custom user model must implement the interface UserModel. Here and example:
+	//  type FullUser struct {
+	//   	UID         uint `gorm:"auto_increment;primary_key"`
+	//   	Mail        string
+	//   	EncPassword string
+	//   	Username    string
+	//   	Role        bool
+	//  }
+	//
+	//  func (u FullUser) GetID() uint {
+	//  	return u.UID
+	//  }
+	//
+	//  func (u FullUser) GetEmail() string {
+	//  	return u.Mail
+	//  }
+	//
+	//  func (u FullUser) GetPassword() string {
+	//  	return u.EncPassword
+	//  }
+	//
+	//  func (FullUser) TableName() string {
+	//  	return "user"
+	//  }
+	//
+	//  func (FullUser) EmailColumnName() string {
+	//  	return "mail"
+	//  }
+	//
+	//  func (user *FullUser) ID(id uint) {
+	//  	user.UID = id
+	//  }
+	//
+	//  // Used for copier (see https://github.com/jinzhu/copier)
+	//  func (user *FullUser) Email(email string) {
+	//  	user.Mail = email
+	//  }
+	//
+	//  // Used for copier (see https://github.com/jinzhu/copier)
+	//  func (user *FullUser) Password(password string) {
+	//  	user.EncPassword = password
+	//  }
+	//
+	//  func (u FullUser) MarshalJSON() ([]byte, error) {
+	//  	return json.Marshal(struct {
+	//  		ID        uint   `json:"id"`
+	//  		Mail      string `json:"mail"`
+	//  		Username  string `json:"username"`
+	//  		RandToken string `json:"rand_token"`
+	//  	}{
+	//  		ID:        u.UID,
+	//  		Mail:      u.Mail,
+	//  		Username:  u.Username,
+	//  		RandToken: "RAND TOKEN",
+	//  	})
+	//  }
+	//
+	//  conf := microbo.ServerConf{UserModel: &FullUser{}}
+	//  server := microbo.NewServerWithOpts(&conf)
+	//  server.Run()
+	// The /auth/login endpoint will return the user json defined by
+	// FullUser#MarshalJSON.
+	UserModel UserModel
+	// The Log middleware
+	// See https://godoc.org/github.com/gorilla/mux#Router.Use
+	LogMiddleware mux.MiddlewareFunc
+	// The Timeout middleware. The default use http.TimeoutHandler with dt
+	// parameters set to 2 seconds.
+	// See https://godoc.org/net/http#TimeoutHandler
+	// See https://godoc.org/github.com/gorilla/mux#Router.Use
+	TimeoutMiddleware mux.MiddlewareFunc
+	// ReadTimeout is the maximum duration for reading the entire request,
+	// including the body.
+	// See https://godoc.org/net/http#Server
+	ReadTimeout *time.Duration
+	// WriteTimeout is the maximum duration before timing out writes of the
+	// response.
+	// See https://godoc.org/net/http#Server
+	WriteTimeout *time.Duration
+}
+
 // The base server struct. It contains the Router and the DB access.
 type Server struct {
 	// http.Server variable. See https://godoc.org/net/http#Server
@@ -107,23 +192,13 @@ type Server struct {
 	// The path of the public folder. Files inside will be serverd as static
 	// files.
 	RootPath string
-	// The CORS middleware
-	CorsMiddleware mux.MiddlewareFunc
-	// The Log middleware
-	LogMiddleware mux.MiddlewareFunc
-	// The Timeout middleware
-	TimeoutMiddleware mux.MiddlewareFunc
 
-	setupDone           bool
 	pathsWithAuthRouter *mux.Router
 	jwtKey              string
 	userModel           UserModel
 }
 
 // Create a new Microbo server.
-//
-// You can pass a pointer to an existing gorm.DB variable, or nil to create a
-// new one using .env variables DB_DIALECT and DB_CONNECTION.
 //
 // Microbo uses config enviroment variables that can be store in a handy .env
 // file. The available env variables are:
@@ -135,106 +210,68 @@ type Server struct {
 //  - ROOT_PATH_ENDPOINT: URL path to access public files (es: /public/).
 //  - SERVER_ADDR: the server address with port (es: 127.0.0.1:3000).
 //  - JWT_KEY: the JWT key used to sign tokens.
-func NewServer(db *gorm.DB) *Server {
-	if db == nil {
+func NewServer() *Server {
+	return NewServerWithOpts(nil)
+}
+
+// Create a new Microbo server with configuration options.
+func NewServerWithOpts(conf *ServerConf) *Server {
+	if conf == nil {
+		conf = &ServerConf{}
+	}
+	if conf.DB == nil {
 		var err error
 		if os.Getenv("DB_DIALECT") != "" {
-			db, err = gorm.Open(os.Getenv("DB_DIALECT"), os.Getenv("DB_CONNECTION"))
+			conf.DB, err = gorm.Open(os.Getenv("DB_DIALECT"), os.Getenv("DB_CONNECTION"))
 			if err != nil {
 				log.Panic(err)
 			}
 		}
 	}
+	if conf.UserModel == nil {
+		conf.UserModel = &DefaultUser{}
+	}
+	if conf.LogMiddleware == nil {
+		conf.LogMiddleware = logMiddleware
+	}
+	if conf.TimeoutMiddleware == nil {
+		conf.TimeoutMiddleware = timeoutMiddleware
+	}
+	if conf.ReadTimeout == nil {
+		readTimeout := 15 * time.Second
+		conf.ReadTimeout = &readTimeout
+	}
+	if conf.WriteTimeout == nil {
+		writeTimeout := 15 * time.Second
+		conf.WriteTimeout = &writeTimeout
+	}
+
 	router := mux.NewRouter()
-	return &Server{
+	server := &Server{
 		Server: http.Server{
 			Handler:      router,
 			Addr:         os.Getenv("SERVER_ADDR"),
-			WriteTimeout: 15 * time.Second,
-			ReadTimeout:  15 * time.Second,
+			ReadTimeout:  *conf.ReadTimeout,
+			WriteTimeout: *conf.WriteTimeout,
 		},
-		Router:            router,
-		DB:                db,
-		RootPath:          os.Getenv("ROOT_PATH"),
-		CorsMiddleware:    corsMiddleware,
-		LogMiddleware:     logMiddleware,
-		TimeoutMiddleware: timeoutMiddleware,
+		Router:   router,
+		DB:       conf.DB,
+		RootPath: os.Getenv("ROOT_PATH"),
 
-		setupDone:           false,
 		pathsWithAuthRouter: mux.NewRouter(),
 		jwtKey:              os.Getenv("JWT_KEY"),
-		userModel:           &DefaultUser{},
+		userModel:           conf.UserModel,
 	}
+
+	server.Router.Use(corsMiddleware)
+	server.Router.Use(conf.LogMiddleware)
+	server.Router.Use(conf.TimeoutMiddleware)
+	server.setupStatic(os.Getenv("ROOT_PATH_ENDPOINT"))
+	server.addJWTAuthSupport()
+	return server
 }
 
 // Public API
-
-// Set a custom user model. The custom user model must implement the interface UserModel. Here and example:
-//  type FullUser struct {
-//   	UID         uint `gorm:"auto_increment;primary_key"`
-//   	Mail        string
-//   	EncPassword string
-//   	Username    string
-//   	Role        bool
-//  }
-//
-//  func (u FullUser) GetID() uint {
-//  	return u.UID
-//  }
-//
-//  func (u FullUser) GetEmail() string {
-//  	return u.Mail
-//  }
-//
-//  func (u FullUser) GetPassword() string {
-//  	return u.EncPassword
-//  }
-//
-//  func (FullUser) TableName() string {
-//  	return "user"
-//  }
-//
-//  func (FullUser) EmailColumnName() string {
-//  	return "mail"
-//  }
-//
-//  func (user *FullUser) ID(id uint) {
-//  	user.UID = id
-//  }
-//
-//  // Used for copier (see https://github.com/jinzhu/copier)
-//  func (user *FullUser) Email(email string) {
-//  	user.Mail = email
-//  }
-//
-//  // Used for copier (see https://github.com/jinzhu/copier)
-//  func (user *FullUser) Password(password string) {
-//  	user.EncPassword = password
-//  }
-//
-//  func (u FullUser) MarshalJSON() ([]byte, error) {
-//  	return json.Marshal(struct {
-//  		ID        uint   `json:"id"`
-//  		Mail      string `json:"mail"`
-//  		Username  string `json:"username"`
-//  		RandToken string `json:"rand_token"`
-//  	}{
-//  		ID:        u.UID,
-//  		Mail:      u.Mail,
-//  		Username:  u.Username,
-//  		RandToken: "RAND TOKEN",
-//  	})
-//  }
-//
-//  server := microbo.NewServer(nil)
-//  server.SetCustomUserModel(&FullUser{})
-//  server.Run()
-// The /auth/login endpoint will return the user json defined by
-// FullUser#MarshalJSON.
-func (server *Server) SetCustomUserModel(userModel UserModel) {
-	server.userModel = userModel
-	server.addJWTAuthSupport()
-}
 
 // HandleFunc registers the handler function for the given pattern in the mux
 // Router. The documentation for ServeMux explains how patterns are matched.
@@ -287,21 +324,8 @@ func (server *Server) HandleFuncWithAuth(method, path string, f func(http.Respon
 	server.HandleFunc(method, path, f)
 }
 
-// Setup the server, should be called before Run().
-func (server *Server) Setup() {
-	server.Router.Use(server.CorsMiddleware)
-	server.Router.Use(server.LogMiddleware)
-	server.Router.Use(server.TimeoutMiddleware)
-	server.setupStatic(os.Getenv("ROOT_PATH_ENDPOINT"))
-	server.addJWTAuthSupport()
-	server.setupDone = true
-}
-
 // Run the server.
 func (server *Server) Run() {
-	if !server.setupDone {
-		server.Setup()
-	}
 	log.Printf("Server started on %s\n", server.Addr)
 	log.Fatal(server.ListenAndServeTLS(os.Getenv("CERT_FILE"), os.Getenv("CERT_KEY")))
 }

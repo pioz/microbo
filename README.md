@@ -42,7 +42,7 @@ type Server struct {
 }
 
 func NewServer() *Server {
-  server := &Server{Server: microbo.NewServer(nil)}
+  server := &Server{Server: microbo.NewServer()}
   server.HandleFunc("GET", "/ping", pingHandler)
   server.HandleFuncWithAuth("GET", "/secure-ping", server.securePingHandler)
   return server
