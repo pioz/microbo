@@ -94,7 +94,7 @@ func (DefaultUser) EmailColumnName() string {
 	return "email"
 }
 
-type ServerConf struct {
+type Conf struct {
 	// Pointer to gorm ORM database.
 	// See https://godoc.org/github.com/jinzhu/gorm#DB
 	DB *gorm.DB
@@ -155,7 +155,7 @@ type ServerConf struct {
 	//  	})
 	//  }
 	//
-	//  conf := microbo.ServerConf{UserModel: &FullUser{}}
+	//  conf := microbo.Conf{UserModel: &FullUser{}}
 	//  server := microbo.NewServerWithOpts(&conf)
 	//  server.Run()
 	// The /auth/login endpoint will return the user json defined by
@@ -215,9 +215,9 @@ func NewServer() *Server {
 }
 
 // Create a new Microbo server with configuration options.
-func NewServerWithOpts(conf *ServerConf) *Server {
+func NewServerWithOpts(conf *Conf) *Server {
 	if conf == nil {
-		conf = &ServerConf{}
+		conf = &Conf{}
 	}
 	if conf.DB == nil {
 		var err error

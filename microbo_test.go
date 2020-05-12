@@ -116,7 +116,7 @@ func Test404StaticFile(t *testing.T) {
 
 func TestRegistrationNoBody(t *testing.T) {
 	setEnvVars()
-	server := NewServerWithOpts(&ServerConf{DB: populateDB()})
+	server := NewServerWithOpts(&Conf{DB: populateDB()})
 	recorder := httptest.NewRecorder()
 	populateDB()
 
@@ -127,7 +127,7 @@ func TestRegistrationNoBody(t *testing.T) {
 
 func TestRegistrationInvalidParams(t *testing.T) {
 	setEnvVars()
-	server := NewServerWithOpts(&ServerConf{DB: populateDB()})
+	server := NewServerWithOpts(&Conf{DB: populateDB()})
 	recorder := httptest.NewRecorder()
 	populateDB()
 
@@ -139,7 +139,7 @@ func TestRegistrationInvalidParams(t *testing.T) {
 
 func TestRegistrationEmailAlreadyExist(t *testing.T) {
 	setEnvVars()
-	server := NewServerWithOpts(&ServerConf{DB: populateDB()})
+	server := NewServerWithOpts(&Conf{DB: populateDB()})
 	recorder := httptest.NewRecorder()
 	populateDB()
 
@@ -151,7 +151,7 @@ func TestRegistrationEmailAlreadyExist(t *testing.T) {
 
 func TestRegistration(t *testing.T) {
 	setEnvVars()
-	server := NewServerWithOpts(&ServerConf{DB: populateDB()})
+	server := NewServerWithOpts(&Conf{DB: populateDB()})
 	recorder := httptest.NewRecorder()
 	populateDB()
 
@@ -169,7 +169,7 @@ func TestRegistration(t *testing.T) {
 
 func TestLoginNoBody(t *testing.T) {
 	setEnvVars()
-	server := NewServerWithOpts(&ServerConf{DB: populateDB()})
+	server := NewServerWithOpts(&Conf{DB: populateDB()})
 	recorder := httptest.NewRecorder()
 	populateDB()
 
@@ -180,7 +180,7 @@ func TestLoginNoBody(t *testing.T) {
 
 func TestLoginInvalidParams(t *testing.T) {
 	setEnvVars()
-	server := NewServerWithOpts(&ServerConf{DB: populateDB()})
+	server := NewServerWithOpts(&Conf{DB: populateDB()})
 	recorder := httptest.NewRecorder()
 	populateDB()
 
@@ -192,7 +192,7 @@ func TestLoginInvalidParams(t *testing.T) {
 
 func TestLoginInvalidEmail(t *testing.T) {
 	setEnvVars()
-	server := NewServerWithOpts(&ServerConf{DB: populateDB()})
+	server := NewServerWithOpts(&Conf{DB: populateDB()})
 	recorder := httptest.NewRecorder()
 	populateDB()
 
@@ -204,7 +204,7 @@ func TestLoginInvalidEmail(t *testing.T) {
 
 func TestLoginInvalidPassword(t *testing.T) {
 	setEnvVars()
-	server := NewServerWithOpts(&ServerConf{DB: populateDB()})
+	server := NewServerWithOpts(&Conf{DB: populateDB()})
 	recorder := httptest.NewRecorder()
 	populateDB()
 
@@ -216,7 +216,7 @@ func TestLoginInvalidPassword(t *testing.T) {
 
 func TestLogin(t *testing.T) {
 	setEnvVars()
-	server := NewServerWithOpts(&ServerConf{DB: populateDB()})
+	server := NewServerWithOpts(&Conf{DB: populateDB()})
 	recorder := httptest.NewRecorder()
 	populateDB()
 
@@ -235,7 +235,7 @@ func TestLogin(t *testing.T) {
 
 func TestRefreshTokenWithoutToken(t *testing.T) {
 	setEnvVars()
-	server := NewServerWithOpts(&ServerConf{DB: populateDB()})
+	server := NewServerWithOpts(&Conf{DB: populateDB()})
 	recorder := httptest.NewRecorder()
 	populateDB()
 
@@ -246,7 +246,7 @@ func TestRefreshTokenWithoutToken(t *testing.T) {
 
 func TestRefreshToken(t *testing.T) {
 	setEnvVars()
-	server := NewServerWithOpts(&ServerConf{DB: populateDB()})
+	server := NewServerWithOpts(&Conf{DB: populateDB()})
 	recorder := httptest.NewRecorder()
 	populateDB()
 
@@ -285,7 +285,7 @@ func authPingHandler(w http.ResponseWriter, r *http.Request) {
 
 func TestGetRequestHandlerWithAuth(t *testing.T) {
 	setEnvVars()
-	server := NewServerWithOpts(&ServerConf{DB: populateDB()})
+	server := NewServerWithOpts(&Conf{DB: populateDB()})
 	server.HandleFuncWithAuth("GET", "/ping", authPingHandler)
 
 	user := DefaultUser{}
@@ -372,7 +372,7 @@ func TestLoginWithCustomUser(t *testing.T) {
 	user := FullUser{Mail: "hanfry@sample.com", Username: "hanfry", EncPassword: string(hashedPassword)}
 	db.AutoMigrate(&user)
 	db.Create(&user)
-	server := NewServerWithOpts(&ServerConf{DB: db, UserModel: &FullUser{}})
+	server := NewServerWithOpts(&Conf{DB: db, UserModel: &FullUser{}})
 	recorder := httptest.NewRecorder()
 	userID := user.UID
 
@@ -393,7 +393,7 @@ func TestRegistrationWithCustomUser(t *testing.T) {
 	setEnvVars()
 	db, _ := gorm.Open(os.Getenv("DB_DIALECT"), os.Getenv("DB_CONNECTION"))
 	db.AutoMigrate(&FullUser{})
-	server := NewServerWithOpts(&ServerConf{DB: db, UserModel: &FullUser{}})
+	server := NewServerWithOpts(&Conf{DB: db, UserModel: &FullUser{}})
 	recorder := httptest.NewRecorder()
 
 	payload := []byte(`{"email":"hanfry@sample.com","password":"querty"}`)
