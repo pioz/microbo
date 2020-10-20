@@ -16,7 +16,6 @@ JWT_KEY="1234"
 ROOT_PATH="/var/www/public"
 ROOT_PATH_ENDPOINT="/public/"
 SERVER_ADDR="127.0.0.1:3000"
-
 ```
 
 You can generate the certificate using [mkcert](https://github.com/FiloSottile/mkcert).
