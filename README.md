@@ -12,7 +12,6 @@ First of all you have to create `.env` file like this:
 CERT_FILE="./cert/localhost+1.pem"
 CERT_KEY="./cert/localhost+1-key.pem"
 DB_CONNECTION=":memory:"
-DB_DIALECT="sqlite"
 JWT_KEY="1234"
 ROOT_PATH="/var/www/public"
 ROOT_PATH_ENDPOINT="/public/"
@@ -33,16 +32,17 @@ import (
   "net/http"
   "os"
 
-  _ "github.com/jinzhu/gorm/dialects/mysql"
   "github.com/pioz/microbo"
+  "gorm.io/driver/sqlite"
+  "gorm.io/gorm"
 )
 
 type Server struct {
   *microbo.Server
 }
 
-func NewServer() *Server {
-  server := &Server{Server: microbo.NewServer()}
+func NewServer(db *gorm.DB) *Server {
+  server := &Server{Server: microbo.NewServer(db)}
   server.HandleFunc("GET", "/ping", pingHandler)
   server.HandleFuncWithAuth("GET", "/secure-ping", server.securePingHandler)
   return server
@@ -65,7 +65,8 @@ func (server *Server) securePingHandler(w http.ResponseWriter, r *http.Request) 
 
 func main() {
   os.Setenv("SERVER_ADDR", "127.0.0.1:3001") // override env variable
-  NewServer().Run()
+  db, _ := gorm.Open(sqlite.Open(os.Getenv("DB_CONNECTION")), nil)
+  NewServer(db).Run()
 }
 ```
 

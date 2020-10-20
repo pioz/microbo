@@ -7,6 +7,7 @@ package microbo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -19,13 +20,16 @@ import (
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/mux"
 	"github.com/jinzhu/copier"
-	"github.com/jinzhu/gorm"
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 func init() {
-	godotenv.Load()
+	err := godotenv.Load()
+	if err != nil {
+		panic(err)
+	}
 }
 
 type httpNoDirFileSystem struct {
@@ -38,6 +42,9 @@ func (fs httpNoDirFileSystem) Open(path string) (http.File, error) {
 		return nil, err
 	}
 	stat, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
 	if stat.IsDir() {
 		return nil, os.ErrNotExist
 	}
@@ -96,7 +103,7 @@ func (DefaultUser) EmailColumnName() string {
 
 type Conf struct {
 	// Pointer to gorm ORM database.
-	// See https://godoc.org/github.com/jinzhu/gorm#DB
+	// See https://pkg.go.dev/gorm.io/gorm#DB
 	DB *gorm.DB
 	// Set a custom user model. The custom user model must implement the interface UserModel. Here and example:
 	//  type FullUser struct {
@@ -193,7 +200,7 @@ type Server struct {
 	// https://godoc.org/github.com/gorilla/mux#Router
 	Router *mux.Router
 	// Pointer to gorm ORM database. See
-	// https://godoc.org/github.com/jinzhu/gorm#DB
+	// https://pkg.go.dev/gorm.io/gorm#DB
 	DB *gorm.DB
 	// The path of the public folder. Files inside will be serverd as static
 	// files.
@@ -211,28 +218,18 @@ type Server struct {
 //  - CERT_FILE: path to the certificate file (.pem). For dev purpose you can use mkcert (https://github.com/FiloSottile/mkcert).
 //  - CERT_KEY: path to the certificate key file (.pem).
 //  - DB_CONNECTION: a Gorm database connection string (es: "root@tcp(127.0.0.1:3306)/testdb?charset=utf8mb4&parseTime=True").
-//  - DB_DIALECT: one of the SQL dialects made available by Gorm.
 //  - ROOT_PATH: path of the public root path. Files inside will be served as static files.
 //  - ROOT_PATH_ENDPOINT: URL path to access public files (es: /public/).
 //  - SERVER_ADDR: the server address with port (es: 127.0.0.1:3000).
 //  - JWT_KEY: the JWT key used to sign tokens.
-func NewServer() *Server {
-	return NewServerWithOpts(nil)
+func NewServer(db *gorm.DB) *Server {
+	return NewServerWithOpts(&Conf{DB: db})
 }
 
 // Create a new Microbo server with configuration options.
 func NewServerWithOpts(conf *Conf) *Server {
 	if conf == nil {
 		conf = &Conf{}
-	}
-	if conf.DB == nil {
-		var err error
-		if os.Getenv("DB_DIALECT") != "" {
-			conf.DB, err = gorm.Open(os.Getenv("DB_DIALECT"), os.Getenv("DB_CONNECTION"))
-			if err != nil {
-				log.Panic(err)
-			}
-		}
 	}
 	if conf.UserModel == nil {
 		conf.UserModel = &DefaultUser{}
@@ -339,7 +336,6 @@ func (server *Server) Run() {
 // Shutdown the server.
 func (server *Server) Shutdown() {
 	log.Println("Server is shutting down")
-	server.DB.Close()
 }
 
 // Setup Methods
@@ -442,10 +438,6 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
-type authResponse struct {
-	Token string `json:"token"`
-}
-
 func (server *Server) registerHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Body == nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
@@ -459,14 +451,18 @@ func (server *Server) registerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := server.copyUserModel()
-	if !server.DB.Table(user.TableName()).Where(fmt.Sprintf("%s = ?", user.EmailColumnName()), request.Email).Find(user).RecordNotFound() {
+	err = server.DB.Table(user.TableName()).Where(fmt.Sprintf("%s = ?", user.EmailColumnName()), request.Email).First(user).Error
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		http.Error(w, "Email already in use", http.StatusConflict)
 		return
 	}
 	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(request.Password), bcrypt.DefaultCost)
 	defaultUser := DefaultUser{Email: request.Email, Password: string(hashedPassword)}
 
-	copier.Copy(user, defaultUser)
+	if err = copier.Copy(user, defaultUser); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	if err = server.DB.Create(user).Error; err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -487,7 +483,8 @@ func (server *Server) loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := server.copyUserModel()
-	if server.DB.Where(fmt.Sprintf("%s = ?", user.EmailColumnName()), request.Email).Find(user).RecordNotFound() {
+	err = server.DB.Where(fmt.Sprintf("%s = ?", user.EmailColumnName()), request.Email).First(user).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		http.Error(w, "Invalid email and/or password", http.StatusUnauthorized)
 		return
 	}
@@ -501,7 +498,10 @@ func (server *Server) loginHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 	server.addTokenToHeader(claims, w)
 	encoder := json.NewEncoder(w)
-	encoder.Encode(user)
+	if err = encoder.Encode(user); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 }
 
 func (server *Server) refreshHandler(w http.ResponseWriter, r *http.Request) {
@@ -531,11 +531,8 @@ func (server *Server) addTokenToHeader(claims *jwtClaims, w http.ResponseWriter)
 }
 
 func (server *Server) addJWTAuthSupport() {
-	if os.Getenv("DB_DIALECT") != "" {
-		tableName := server.userModel.TableName()
-		if os.Getenv("JWT_KEY") != "" && server.DB.HasTable(tableName) && server.DB.Dialect().HasColumn(tableName, server.userModel.EmailColumnName()) {
-			server.Router.Use(server.jwtMiddleware)
-			server.setupAuthHandlers()
-		}
+	if server.DB != nil && os.Getenv("JWT_KEY") != "" && server.DB.Migrator().HasTable(server.userModel) && server.DB.Migrator().HasColumn(server.userModel, server.userModel.EmailColumnName()) {
+		server.Router.Use(server.jwtMiddleware)
+		server.setupAuthHandlers()
 	}
 }

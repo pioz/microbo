@@ -10,27 +10,29 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jinzhu/gorm"
-	_ "github.com/jinzhu/gorm/dialects/sqlite"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 func setEnvVars() {
 	os.Setenv("CERT_FILE", "./cert/localhost+1.pem")
 	os.Setenv("CERT_KEY", "./cert/localhost+1-key.pem")
 	os.Setenv("DB_CONNECTION", ":memory:")
-	os.Setenv("DB_DIALECT", "sqlite3")
 	os.Setenv("ROOT_PATH", "./fixtures/public")
 	os.Setenv("ROOT_PATH_ENDPOINT", "/public/")
 	os.Setenv("SERVER_ADDR", "127.0.0.1:3000")
 }
 
 func populateDB() *gorm.DB {
-	db, _ := gorm.Open(os.Getenv("DB_DIALECT"), os.Getenv("DB_CONNECTION"))
+	db, _ := gorm.Open(sqlite.Open(os.Getenv("DB_CONNECTION")), nil)
 	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("querty"), bcrypt.DefaultCost)
 	user := DefaultUser{Email: "pioz@sample.com", Password: string(hashedPassword)}
-	db.AutoMigrate(&user)
+	err := db.AutoMigrate(&user)
+	if err != nil {
+		panic(err)
+	}
 	db.Create(&user)
 	return db
 }
@@ -38,22 +40,29 @@ func populateDB() *gorm.DB {
 func handlePing(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 	encoder := json.NewEncoder(w)
-	encoder.Encode("pong")
+	err := encoder.Encode("pong")
+	if err != nil {
+		panic(err)
+	}
 }
 
 func TestGetRequestHandler(t *testing.T) {
 	setEnvVars()
-	server := NewServer()
+	db := populateDB()
+	server := NewServer(db)
 	server.HandleFunc("GET", "/ping", handlePing)
 	recorder := httptest.NewRecorder()
 
 	req, _ := http.NewRequest("GET", "/ping", nil)
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.Equal(t, "application/json", recorder.HeaderMap["Content-Type"][0])
+	assert.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
 
 	var r string
-	json.Unmarshal(recorder.Body.Bytes(), &r)
+	err := json.Unmarshal(recorder.Body.Bytes(), &r)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	assert.Equal(t, "pong", r)
 }
@@ -65,7 +74,7 @@ type CustomServer struct {
 
 func NewCustomServer(data string) *CustomServer {
 	return &CustomServer{
-		Server: NewServer(),
+		Server: NewServer(nil),
 		Data:   data,
 	}
 }
@@ -73,7 +82,10 @@ func NewCustomServer(data string) *CustomServer {
 func (server *CustomServer) handlePingCustomServer(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 	encoder := json.NewEncoder(w)
-	encoder.Encode(server.Data)
+	err := encoder.Encode(server.Data)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func TestHelloWorldWithCustomServer(t *testing.T) {
@@ -85,28 +97,31 @@ func TestHelloWorldWithCustomServer(t *testing.T) {
 	req, _ := http.NewRequest("GET", "/ping", nil)
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.Equal(t, "application/json", recorder.HeaderMap["Content-Type"][0])
+	assert.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
 
 	var r string
-	json.Unmarshal(recorder.Body.Bytes(), &r)
+	err := json.Unmarshal(recorder.Body.Bytes(), &r)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	assert.Equal(t, "pong", r)
 }
 
 func TestGetStaticFile(t *testing.T) {
 	setEnvVars()
-	server := NewServer()
+	server := NewServer(nil)
 	recorder := httptest.NewRecorder()
 
 	req, _ := http.NewRequest("GET", "/public/images/eld_197.png", nil)
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.Equal(t, "image/png", recorder.HeaderMap["Content-Type"][0])
+	assert.Equal(t, "image/png", recorder.Header().Get("Content-Type"))
 }
 
 func Test404StaticFile(t *testing.T) {
 	setEnvVars()
-	server := NewServer()
+	server := NewServer(nil)
 	recorder := httptest.NewRecorder()
 
 	req, _ := http.NewRequest("GET", "/public/images/not_exists.png", nil)
@@ -141,7 +156,6 @@ func TestRegistrationEmailAlreadyExist(t *testing.T) {
 	setEnvVars()
 	server := NewServerWithOpts(&Conf{DB: populateDB()})
 	recorder := httptest.NewRecorder()
-	populateDB()
 
 	payload := []byte(`{"email":"pioz@sample.com","password":"querty"}`)
 	req, _ := http.NewRequest("POST", "/auth/register", bytes.NewBuffer(payload))
@@ -159,7 +173,7 @@ func TestRegistration(t *testing.T) {
 	req, _ := http.NewRequest("POST", "/auth/register", bytes.NewBuffer(payload))
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.Nil(t, recorder.HeaderMap["X-Token"])
+	assert.Empty(t, recorder.Header().Get("X-Token"))
 
 	user := DefaultUser{}
 	server.DB.Last(&user)
@@ -224,11 +238,14 @@ func TestLogin(t *testing.T) {
 	req, _ := http.NewRequest("POST", "/auth/login", bytes.NewBuffer(payload))
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.Equal(t, "application/json", recorder.HeaderMap["Content-Type"][0])
-	assert.NotEmpty(t, recorder.HeaderMap["X-Token"][0])
+	assert.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
+	assert.NotEmpty(t, recorder.Header().Get("X-Token"))
 
 	user := DefaultUser{}
-	json.Unmarshal(recorder.Body.Bytes(), &user)
+	err := json.Unmarshal(recorder.Body.Bytes(), &user)
+	if err != nil {
+		t.Fatal(err)
+	}
 	assert.Equal(t, user.Email, "pioz@sample.com")
 	assert.NotEmpty(t, user.ID)
 }
@@ -254,7 +271,7 @@ func TestRefreshToken(t *testing.T) {
 	req, _ := http.NewRequest("POST", "/auth/login", bytes.NewBuffer(payload))
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
-	token := recorder.HeaderMap["X-Token"][0]
+	token := recorder.Header().Get("X-Token")
 
 	time.Sleep(time.Second)
 
@@ -263,13 +280,13 @@ func TestRefreshToken(t *testing.T) {
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.Equal(t, "application/json", recorder.HeaderMap["Content-Type"][0])
-	assert.NotEqual(t, token, recorder.HeaderMap["X-Token"][0])
+	assert.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
+	assert.NotEqual(t, token, recorder.Header().Get("X-Token"))
 }
 
 func TestNoAuthIfNoValidUserTable(t *testing.T) {
 	setEnvVars()
-	server := NewServer()
+	server := NewServer(nil)
 	recorder := httptest.NewRecorder()
 	req, _ := http.NewRequest("POST", "/auth/login", nil)
 	server.Router.ServeHTTP(recorder, req)
@@ -280,7 +297,10 @@ func authPingHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Add("Content-Type", "application/json")
 	userId := r.Context().Value("user_id").(uint)
 	encoder := json.NewEncoder(w)
-	encoder.Encode(fmt.Sprintf("pong %d", userId))
+	err := encoder.Encode(fmt.Sprintf("pong %d", userId))
+	if err != nil {
+		panic(err)
+	}
 }
 
 func TestGetRequestHandlerWithAuth(t *testing.T) {
@@ -296,7 +316,7 @@ func TestGetRequestHandlerWithAuth(t *testing.T) {
 	req, _ := http.NewRequest("POST", "/auth/login", bytes.NewBuffer(payload))
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
-	token := recorder.HeaderMap["X-Token"][0]
+	token := recorder.Header().Get("X-Token")
 	fmt.Println(token)
 
 	recorder = httptest.NewRecorder()
@@ -304,10 +324,13 @@ func TestGetRequestHandlerWithAuth(t *testing.T) {
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.Equal(t, "application/json", recorder.HeaderMap["Content-Type"][0])
+	assert.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
 
 	var r string
-	json.Unmarshal(recorder.Body.Bytes(), &r)
+	err := json.Unmarshal(recorder.Body.Bytes(), &r)
+	if err != nil {
+		t.Fatal(err)
+	}
 	assert.Equal(t, fmt.Sprintf("pong %d", user.ID), r)
 }
 
@@ -367,10 +390,13 @@ func (u FullUser) MarshalJSON() ([]byte, error) {
 
 func TestLoginWithCustomUser(t *testing.T) {
 	setEnvVars()
-	db, _ := gorm.Open(os.Getenv("DB_DIALECT"), os.Getenv("DB_CONNECTION"))
+	db, _ := gorm.Open(sqlite.Open(os.Getenv("DB_CONNECTION")), nil)
 	hashedPassword, _ := bcrypt.GenerateFromPassword([]byte("querty"), bcrypt.DefaultCost)
 	user := FullUser{Mail: "hanfry@sample.com", Username: "hanfry", EncPassword: string(hashedPassword)}
-	db.AutoMigrate(&user)
+	err := db.AutoMigrate(&user)
+	if err != nil {
+		t.Fatal(err)
+	}
 	db.Create(&user)
 	server := NewServerWithOpts(&Conf{DB: db, UserModel: &FullUser{}})
 	recorder := httptest.NewRecorder()
@@ -380,19 +406,25 @@ func TestLoginWithCustomUser(t *testing.T) {
 	req, _ := http.NewRequest("POST", "/auth/login", bytes.NewBuffer(payload))
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.Equal(t, "application/json", recorder.HeaderMap["Content-Type"][0])
-	assert.NotEmpty(t, recorder.HeaderMap["X-Token"][0])
+	assert.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
+	assert.NotEmpty(t, recorder.Header().Get("X-Token"))
 
 	user = FullUser{}
-	json.Unmarshal(recorder.Body.Bytes(), &user)
+	err = json.Unmarshal(recorder.Body.Bytes(), &user)
+	if err != nil {
+		t.Fatal(err)
+	}
 	responseJson := fmt.Sprintf("{\"id\":%d,\"mail\":\"hanfry@sample.com\",\"username\":\"hanfry\",\"rand_token\":\"RAND TOKEN\"}\n", userID)
-	assert.Equal(t, responseJson, string(recorder.Body.Bytes()))
+	assert.Equal(t, responseJson, recorder.Body.String())
 }
 
 func TestRegistrationWithCustomUser(t *testing.T) {
 	setEnvVars()
-	db, _ := gorm.Open(os.Getenv("DB_DIALECT"), os.Getenv("DB_CONNECTION"))
-	db.AutoMigrate(&FullUser{})
+	db, _ := gorm.Open(sqlite.Open(os.Getenv("DB_CONNECTION")), nil)
+	err := db.AutoMigrate(&FullUser{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	server := NewServerWithOpts(&Conf{DB: db, UserModel: &FullUser{}})
 	recorder := httptest.NewRecorder()
 
@@ -400,7 +432,7 @@ func TestRegistrationWithCustomUser(t *testing.T) {
 	req, _ := http.NewRequest("POST", "/auth/register", bytes.NewBuffer(payload))
 	server.Router.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusOK, recorder.Code)
-	assert.Nil(t, recorder.HeaderMap["X-Token"])
+	assert.Empty(t, recorder.Header().Get("X-Token"))
 
 	user := FullUser{}
 	server.DB.Last(&user)
